@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+.ipynb_checkpoints/
+.env
+.env.*
+*.part
+*.session
+*_token.txt
+*_cookies.txt
+aria2_rpc_secret.txt

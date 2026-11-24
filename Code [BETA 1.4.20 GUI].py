@@ -1,4 +1,5 @@
 import os
+import errno
 import re
 import json
 import time
@@ -51,7 +52,7 @@ def ensure_python_package(import_name, package_name=None):
 ensure_system_tools()
 ensure_python_package("requests")
 ensure_python_package("tqdm")
-ensure_python_package("yt_dlp", "yt-dlp")
+ensure_python_package("yt_dlp", "yt-dlp[default]")
 ensure_python_package("ipywidgets")
 
 import requests
@@ -62,11 +63,18 @@ from google.colab import drive
 from yt_dlp import YoutubeDL
 
 
+DRIVE_STAGE = ".azudl-in-progress"
+TORRENT_IMPORT = (
+    "Hosted Colab does not allow peer-to-peer downloads. "
+    "Paste a completed HTTPS file link from your torrent service into the Direct tab."
+)
+
+
 class AzuDlGC2GD:
     def __init__(self):
         self.project_name = "AzuDl - GC2GD"
         self.project_subtitle = "Azizi Universal Downloader - Google Colab to Google Drive"
-        self.version = "1.4.20 GUI Beta"
+        self.version = "1.4.20 GUI Beta · Drive edition"
 
         self.drive_mount_path = Path("/content/drive")
         self.my_drive_path = self.drive_mount_path / "MyDrive"
@@ -79,9 +87,13 @@ class AzuDlGC2GD:
         self.github_dir = self.base_dir / "GitHubDownloads"
         self.archive_dir = self.base_dir / "Archives"
         self.logs_dir = self.base_dir / "Logs"
-        self.temp_dir = Path("/content/AzuDl-GC2GD-Temp")
+        self.hosted_colab = any(os.environ.get(key) for key in (
+            "AZUDL_HOSTED_COLAB", "COLAB_RELEASE_TAG", "COLAB_BACKEND_VERSION",
+        ))
         self.history_file = self.logs_dir / "download_history.json"
         self.aria2_session_file = self.logs_dir / "aria2.session"
+        if self.hosted_colab:
+            self.aria2_session_file = self.logs_dir / "aria2-http.session"
         self.aria2_secret_file = self.logs_dir / "aria2_rpc_secret.txt"
         self.youtube_cookies_file = self.logs_dir / "youtube_cookies.txt"
         self.youtube_po_token_file = self.logs_dir / "youtube_po_token.txt"
@@ -235,8 +247,10 @@ class AzuDlGC2GD:
 
         return False
 
-    def is_temporary_output_file(self, path):
+    def is_temporary_output_file(self, path, *, include_staging=False):
         path = Path(path)
+        if not include_staging and DRIVE_STAGE in path.parts:
+            return True
         name = path.name.lower()
         suffix = path.suffix.lower()
 
@@ -251,7 +265,7 @@ class AzuDlGC2GD:
     def get_unique_destination(self, destination):
         destination = Path(destination)
 
-        if not destination.exists():
+        if not destination.exists() and not destination.is_symlink():
             return destination
 
         stem = destination.stem
@@ -262,10 +276,59 @@ class AzuDlGC2GD:
         while True:
             candidate = parent / f"{stem}_{counter}{suffix}"
 
-            if not candidate.exists():
+            if not candidate.exists() and not candidate.is_symlink():
                 return candidate
 
             counter += 1
+
+    def drive_folder(self, directory):
+        directory = Path(directory).resolve()
+        if not directory.is_relative_to(self.my_drive_path.resolve()):
+            raise ValueError("Choose a folder inside My Drive.")
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def check_drive_space(self, destination, expected):
+        if expected is None or expected <= 0:
+            return
+        try:
+            usage = shutil.disk_usage(destination)
+        except OSError:
+            return
+        if usage.total > 0 and expected > usage.free:
+            raise RuntimeError(
+                f"Google Drive reports {self.format_bytes(usage.free)} free. "
+                f"This transfer needs about {self.format_bytes(expected)}. "
+                "Free space or select a smaller media format."
+            )
+
+    def check_direct_space(self, url, destination):
+        try:
+            with requests.head(
+                url, headers={"Accept-Encoding": "identity"}, allow_redirects=True, timeout=(3, 3)
+            ) as response:
+                if not response.ok or response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                    return
+                size = int(response.headers.get("Content-Length", "0"))
+        except (requests.RequestException, ValueError):
+            return
+        self.check_drive_space(destination, size)
+
+    def promote_drive_file(self, source, destination_dir, filename=None):
+        source = Path(source)
+        destination_dir = self.drive_folder(destination_dir)
+        if source.is_symlink() or not source.resolve().is_relative_to(self.my_drive_path.resolve()):
+            raise ValueError("The staged file must be inside My Drive.")
+        expected_size = source.stat().st_size
+        if not expected_size or not source.is_file():
+            raise RuntimeError("The staged file is missing or empty.")
+        destination = destination_dir / self.sanitize_name(filename or source.name)
+        target = self.get_unique_destination(destination)
+        # A same-mount rename avoids copying large files a second time.
+        source.rename(target)
+        if not self.verify_drive_file_visible(target, expected_size=expected_size, timeout=30):
+            raise RuntimeError(f"Could not verify the renamed file on Drive: {target}")
+        return target
 
     def safe_transfer_to_drive(self, source, destination_dir, remove_source=True):
         source = Path(source)
@@ -326,7 +389,7 @@ class AzuDlGC2GD:
 
         return destination
 
-    def collect_final_files(self, folder):
+    def collect_final_files(self, folder, *, include_staging=False):
         folder = Path(folder)
 
         if not folder.exists():
@@ -335,7 +398,7 @@ class AzuDlGC2GD:
         files = []
 
         for item in folder.glob("**/*"):
-            if item.is_file() and not self.is_temporary_output_file(item):
+            if item.is_file() and not self.is_temporary_output_file(item, include_staging=include_staging):
                 try:
                     if item.stat().st_size > 0:
                         files.append(item)
@@ -477,8 +540,6 @@ class AzuDlGC2GD:
 
         for item in dirs:
             item.mkdir(parents=True, exist_ok=True)
-
-        self.temp_dir.mkdir(parents=True, exist_ok=True)
 
         if not self.aria2_session_file.exists():
             self.aria2_session_file.write_text("")
@@ -663,10 +724,11 @@ class AzuDlGC2GD:
             "--retry-wait=10",
             "--timeout=60",
             "--connect-timeout=60",
-            "--enable-dht=true",
-            "--enable-dht6=true",
-            "--enable-peer-exchange=true",
-            "--bt-enable-lpd=true",
+            f"--enable-dht={str(not self.hosted_colab).lower()}",
+            f"--enable-dht6={str(not self.hosted_colab).lower()}",
+            f"--enable-peer-exchange={str(not self.hosted_colab).lower()}",
+            f"--bt-enable-lpd={str(not self.hosted_colab).lower()}",
+            f"--follow-torrent={str(not self.hosted_colab).lower()}",
             "--bt-save-metadata=true",
             "--bt-load-saved-metadata=true",
             "--console-log-level=warn"
@@ -1701,6 +1763,8 @@ class AzuDlGC2GD:
             time.sleep(1)
 
     def download_magnet(self, magnet, folder_name="", speed_limit="", private=False, seed=False):
+        if self.hosted_colab:
+            raise ValueError(TORRENT_IMPORT)
         magnet = magnet.strip()
         folder_name = self.normalize_folder_name(folder_name, "Torrent")
         save_dir = self.torrent_dir / folder_name
@@ -1744,6 +1808,8 @@ class AzuDlGC2GD:
         self.print_kv("Saved to", save_dir)
 
     def download_torrent_file(self, source, folder_name="", speed_limit="", private=False, seed=False):
+        if self.hosted_colab:
+            raise ValueError(TORRENT_IMPORT)
         source = source.strip()
         folder_name = self.normalize_folder_name(folder_name, "TorrentFile")
         save_dir = self.torrent_dir / folder_name
@@ -2204,13 +2270,16 @@ class AzuDlGC2GD:
         url = url.strip()
         folder_name = self.normalize_folder_name(folder_name, "Direct")
         file_name = file_name.strip()
-        save_dir = self.direct_dir / folder_name
-        save_dir.mkdir(parents=True, exist_ok=True)
+        save_dir = self.drive_folder(self.direct_dir / folder_name)
 
         if not url.startswith(("http://", "https://", "ftp://")):
             raise ValueError("Invalid direct link.")
 
         options = {}
+        if self.hosted_colab:
+            if urlparse(url).path.lower().endswith(".torrent"):
+                raise ValueError(TORRENT_IMPORT)
+            options["follow-torrent"] = "false"
 
         if file_name:
             options["out"] = self.sanitize_name(file_name)
@@ -2225,6 +2294,10 @@ class AzuDlGC2GD:
             if header_lines:
                 options["header"] = header_lines
 
+        # An existing aria2 checkpoint can resume even if there is less free
+        # space than the full file size. A HEAD probe is only useful for fresh jobs.
+        if not headers and url.startswith(("http://", "https://")) and not any(save_dir.glob("*.aria2")):
+            self.check_direct_space(url, save_dir)
         gid = self.add_aria2_download([url], save_dir, speed_limit, options)
 
         self.print_section("Direct Download Added")
@@ -2374,12 +2447,23 @@ class AzuDlGC2GD:
             raise ValueError("YouTube URL is required.")
 
         folder_name = self.normalize_folder_name(folder_name, "YouTube")
-        save_dir = self.youtube_dir / folder_name
-        save_dir.mkdir(parents=True, exist_ok=True)
+        save_dir = self.drive_folder(self.youtube_dir / folder_name)
 
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + secrets.token_hex(4)
-        work_dir = self.temp_dir / "YouTube" / run_id
-        work_dir.mkdir(parents=True, exist_ok=True)
+        work_dir = self.drive_folder(save_dir / DRIVE_STAGE / run_id)
+        self.check_drive_space(work_dir, 1)
+
+        def check_media_space(info, *, incomplete=False):
+            if incomplete:
+                return None
+            formats = info.get("requested_formats") or [info]
+            sizes = [item.get("filesize") or item.get("filesize_approx") for item in formats]
+            if all(sizes):
+                expected = sum(sizes)
+                if len(formats) > 1 or audio_only:
+                    expected *= 2
+                self.check_drive_space(work_dir, expected)
+            return None
 
         progress_state = {
             "bar": None,
@@ -2457,6 +2541,7 @@ class AzuDlGC2GD:
             "fragment_retries": 10,
             "concurrent_fragment_downloads": 4,
             "progress_hooks": [hook],
+            "match_filter": check_media_space,
             "postprocessors": postprocessors,
             "quiet": True,
             "no_warnings": True,
@@ -2494,24 +2579,18 @@ class AzuDlGC2GD:
             if result not in [0, None]:
                 raise RuntimeError(f"yt-dlp returned a non-zero result: {result}")
 
-            local_files = self.collect_final_files(work_dir)
+            staged_files = self.collect_final_files(work_dir, include_staging=True)
+            if not staged_files:
+                raise RuntimeError(f"yt-dlp produced no completed files in {work_dir}.")
 
-            if not local_files:
-                raise RuntimeError(f"YouTube download finished, but no final media file was produced in temporary folder: {work_dir}")
+            transferred_files = [self.promote_drive_file(item, save_dir) for item in staged_files]
+            try:
+                work_dir.rmdir()
+                work_dir.parent.rmdir()
+            except OSError:
+                pass
 
-            self.print_subsection("Local Files Ready for Transfer")
-
-            for item in local_files[:20]:
-                self.print_kv("Local", f"{self.format_bytes(item.stat().st_size)}  {item}")
-
-            transferred_files = self.transfer_folder_contents_to_drive(work_dir, save_dir)
-
-            if not transferred_files:
-                raise RuntimeError("No files were transferred to Google Drive.")
-
-            verified_files = self.verify_output_files(save_dir, label="YouTube download")
-
-        except Exception as error:
+        except (Exception, KeyboardInterrupt) as error:
             try:
                 if progress_state["bar"]:
                     progress_state["bar"].close()
@@ -2519,11 +2598,8 @@ class AzuDlGC2GD:
                 pass
 
             try:
-                if work_dir.exists():
-                    remaining_files = self.collect_final_files(work_dir)
-
-                    if remaining_files:
-                        self.print_status(f"Temporary files were kept for inspection: {work_dir}", "warning")
+                if work_dir.exists() and any(work_dir.iterdir()):
+                    self.print_status(f"Partial and intermediate files were kept on Drive: {work_dir}", "warning")
             except Exception:
                 pass
 
@@ -2539,7 +2615,11 @@ class AzuDlGC2GD:
                 "status": "failed",
                 "error": str(error)
             })
-            raise error
+            if isinstance(error, KeyboardInterrupt):
+                raise RuntimeError("Media transfer interrupted. Check the Drive working folder for partial files.") from None
+            if isinstance(error, OSError):
+                self.raise_drive_write_error(error)
+            raise
 
         self.save_history({
             "type": "youtube",
@@ -2551,7 +2631,7 @@ class AzuDlGC2GD:
         })
 
         self.force_drive_sync()
-        self.print_status("Download completed, transferred, and verified on Google Drive.", "success")
+        self.print_status("Download saved and verified on Google Drive.", "success")
         self.print_kv("Saved to", save_dir)
         self.print_drive_visibility_note(save_dir)
 
@@ -2927,38 +3007,67 @@ class AzuDlGC2GD:
 
     def download_file_requests(self, url, destination_file):
         destination_file = Path(destination_file)
-        destination_file.parent.mkdir(parents=True, exist_ok=True)
+        destination_dir = self.drive_folder(destination_file.parent)
+        stage_dir = self.drive_folder(destination_dir / DRIVE_STAGE)
+        partial = stage_dir / f"github-{secrets.token_hex(8)}.part"
 
-        headers = {
-            "User-Agent": "AzuDl-GC2GD"
-        }
-
+        headers = {"User-Agent": "AzuDl-GC2GD", "Accept-Encoding": "identity"}
         token = self.get_github_token()
-
+        address = urlparse(url)
+        if address.scheme != "https" or address.hostname not in {
+            "api.github.com", "github.com", "raw.githubusercontent.com", "codeload.github.com",
+        } or address.username or address.password or address.port not in {None, 443}:
+            raise ValueError("Expected a GitHub HTTPS download URL.")
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
-        with requests.get(url, headers=headers, stream=True, timeout=60, allow_redirects=True) as response:
-            if response.status_code == 403:
-                raise RuntimeError("GitHub download was blocked by rate limit or access restriction.")
-
-            response.raise_for_status()
-
-            total = int(response.headers.get("content-length", "0") or 0)
-
-            with destination_file.open("wb") as handle:
-                with tqdm(total=total if total > 0 else None, unit="B", unit_scale=True, unit_divisor=1024, desc=destination_file.name) as bar:
+        try:
+            with requests.get(url, headers=headers, stream=True, timeout=(10, 60)) as response:
+                if response.status_code == 403:
+                    raise RuntimeError("GitHub denied this download or reached its rate limit.")
+                if not response.ok:
+                    raise RuntimeError(f"GitHub returned HTTP {response.status_code}.")
+                total = None
+                if response.headers.get("Content-Encoding", "identity").lower() == "identity":
+                    length = response.headers.get("Content-Length", "")
+                    if length.isdecimal():
+                        total = int(length)
+                self.check_drive_space(stage_dir, total)
+                size = 0
+                with partial.open("xb") as handle, tqdm(
+                    total=total, unit="B", unit_scale=True, unit_divisor=1024, desc=destination_file.name
+                ) as bar:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        if not chunk:
-                            continue
+                        if chunk:
+                            handle.write(chunk)
+                            size += len(chunk)
+                            bar.update(len(chunk))
+                if not size or (total is not None and size != total):
+                    raise RuntimeError("GitHub sent an empty or incomplete file.")
+            return self.promote_drive_file(partial, destination_dir, destination_file.name)
+        except (requests.RequestException, KeyboardInterrupt):
+            self.print_partial_location(partial)
+            raise RuntimeError("GitHub transfer interrupted. Start the download again to retry.") from None
+        except OSError as error:
+            self.print_partial_location(partial)
+            self.raise_drive_write_error(error)
+            raise
+        except RuntimeError:
+            self.print_partial_location(partial)
+            raise
+        finally:
+            try:
+                stage_dir.rmdir()
+            except OSError:
+                pass
 
-                        handle.write(chunk)
-                        bar.update(len(chunk))
+    def print_partial_location(self, partial):
+        if partial.exists():
+            self.print_status(f"Incomplete GitHub file kept on Drive: {partial}", "warning")
 
-        if not destination_file.exists() or destination_file.stat().st_size <= 0:
-            raise RuntimeError(f"Downloaded file is empty: {destination_file}")
-
-        return destination_file
+    def raise_drive_write_error(self, error):
+        if error.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", 122), errno.EIO}:
+            raise RuntimeError("Drive could not write the file. Check your Drive quota and mount.") from None
 
     def download_github_repository(self, repo_url, mode="latest", include_assets=True, include_source=True, folder_name="", release_tag="", include_readme=False, include_license=False):
         owner, repo, repo_info, releases, targets = self.get_github_download_targets(
@@ -2975,54 +3084,31 @@ class AzuDlGC2GD:
             raise RuntimeError("No downloadable GitHub targets were found for the selected options.")
 
         folder_name = self.normalize_folder_name(folder_name, f"{owner}_{repo}")
-        final_base = self.github_dir / folder_name
-        work_dir = self.temp_dir / "GitHub" / (datetime.now().strftime("%Y%m%d_%H%M%S_") + secrets.token_hex(4))
-        work_dir.mkdir(parents=True, exist_ok=True)
-
+        final_base = self.drive_folder(self.github_dir / folder_name)
         self.print_section("GitHub Download Started")
         self.print_kv("Repository", f"{owner}/{repo}")
         self.print_kv("Mode", mode)
         self.print_kv("Targets", len(targets))
         self.print_kv("Output folder", final_base)
-        self.print_kv("Temporary folder", work_dir)
 
         transferred = []
-
-        try:
-            for index, target in enumerate(targets, 1):
-                name = self.sanitize_name(target["name"])
-                group = Path(target.get("group", "downloads"))
-                local_file = work_dir / group / name
-
-                self.print_subsection(f"GitHub Target {index} of {len(targets)}")
-                self.print_kv("File", name)
-                self.print_kv("Source", target["url"])
-
-                try:
-                    downloaded = self.download_file_requests(target["url"], local_file)
-                except Exception as error:
-                    if target.get("optional"):
-                        self.print_status(f"Optional file skipped: {name}", "warning")
-                        continue
-                    raise error
-
-                drive_target_dir = final_base / group
-                moved = self.safe_transfer_to_drive(downloaded, drive_target_dir, remove_source=True)
-
-                if moved:
-                    transferred.append(moved)
-                    self.print_kv("Saved", moved)
-
-            if not transferred:
-                raise RuntimeError("GitHub download finished but no files were transferred to Google Drive.")
-
-            self.verify_output_files(final_base, label="GitHub download")
-
-        finally:
+        for index, target in enumerate(targets, 1):
+            name = self.sanitize_name(target["name"])
+            destination = final_base / Path(target.get("group", "downloads")) / name
+            self.print_subsection(f"GitHub Target {index} of {len(targets)}")
+            self.print_kv("File", name)
             try:
-                shutil.rmtree(work_dir, ignore_errors=True)
-            except Exception:
-                pass
+                saved = self.download_file_requests(target["url"], destination)
+            except (OSError, ValueError, RuntimeError):
+                if not target.get("optional"):
+                    raise
+                self.print_status(f"Optional file skipped: {name}", "warning")
+                continue
+            transferred.append(saved)
+            self.print_kv("Saved", saved)
+
+        if not transferred:
+            raise RuntimeError("GitHub download produced no completed files.")
 
         self.save_history({
             "type": "github",
@@ -3034,7 +3120,7 @@ class AzuDlGC2GD:
         })
 
         self.force_drive_sync()
-        self.print_status("GitHub files downloaded, transferred, and verified on Google Drive.", "success")
+        self.print_status("GitHub files saved and verified on Google Drive.", "success")
         self.print_kv("Saved to", final_base)
         self.print_drive_visibility_note(final_base)
 
@@ -3366,7 +3452,7 @@ Speed limit examples:
 
 YouTube downloads
 YouTube mode can download videos, playlists, audio-only MP3 files, thumbnails, and metadata. Quality can be set to best available or a target resolution such as 1080p or 720p. Video and audio are merged automatically with ffmpeg.
-YouTube downloads are processed in local Colab temporary storage first, then safely copied to Google Drive and verified. If the file is not visible on Drive after transfer, AzuDl reports an error instead of showing a false success.
+YouTube downloads and FFmpeg intermediates are written to Google Drive. Completed files are renamed into place and verified. A merge may need room for its inputs and output at the same time.
 AzuDl downloads YouTube media into local Colab temporary storage first, then moves the finished output to Google Drive. This improves reliability and prevents post-processing issues on mounted Drive paths.
 
 YouTube cookies
@@ -4250,6 +4336,8 @@ class AzuDlGC2GDGUI:
         )
 
     def build_torrent_tab(self):
+        if self.app.hosted_colab:
+            return self.panel("Torrent tools", TORRENT_IMPORT, [])
         self.torrent_source = self.text("Torrent source", "Required: magnet:?xt=... or https://example.com/file.torrent or /content/file.torrent")
         self.torrent_folder = self.text("Folder", "Optional output folder name")
         self.torrent_speed = self.text("Speed limit", "Optional, example 5M")

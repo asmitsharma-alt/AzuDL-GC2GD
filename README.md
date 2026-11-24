@@ -1,3 +1,19 @@
+# AzuDL GUI · Drive edition
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/asmitsharma-alt/AzuDL-GC2GD/blob/main/AzuDL_Drive.ipynb)
+
+Run both notebook cells and authorize the Drive mount. Choose a tab and start a download.
+
+- **Direct** uses AzuDL's existing aria2 resume and parallel transfer settings. For a fresh HTTP download, it checks Drive's reported free space when the server provides a file size.
+- **YouTube** stores yt-dlp downloads, playlist files, FFmpeg merge inputs, and MP3 conversion files in a working folder on Drive. Completed files are renamed into place and verified. Merging may need space for the inputs and output at once. On failure, the notebook reports where to find partial files under .azudl-in-progress.
+- **GitHub** streams release assets, archives, and repository files into Drive partials, then verifies and renames them. An interrupted asset can be downloaded again from the GitHub tab.
+- **Torrent-service files** can be imported by pasting the completed HTTPS link into **Direct**. The hosted notebook keeps a separate HTTP-only aria2 session. To resume an old direct download, submit the original URL with the same output folder and filename. [Colab FAQ](https://research.google.com/colaboratory/faq.html)
+
+The notebook uses Code [BETA 1.4.20 GUI].py. The original project documentation and MIT license are included below and in LICENSE.
+
+---
+
+
 # AzuDl - GC2GD
 [![DevSponsors](https://devsponsors.github.io/assets/badges/sponsor.svg)](https://devsponsors.github.io)
 
