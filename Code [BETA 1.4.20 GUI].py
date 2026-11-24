@@ -3847,40 +3847,6 @@ class AzuDlGC2GDGUI:
             color: var(--azudl-primary-dark) !important;
         }
 
-        .azudl-tabs {
-            max-width: 100% !important;
-            overflow-x: auto !important;
-            overflow-y: hidden !important;
-            -webkit-overflow-scrolling: touch !important;
-        }
-        .azudl-tabs > .p-TabBar,
-        .azudl-tabs > .lm-TabBar,
-        .azudl-tabs .p-TabBar-content,
-        .azudl-tabs .lm-TabBar-content {
-            display: flex !important;
-            flex-wrap: nowrap !important;
-            overflow-x: auto !important;
-            overflow-y: hidden !important;
-            max-width: 100% !important;
-            scrollbar-width: thin !important;
-        }
-        .azudl-tabs .p-TabBar-tab,
-        .azudl-tabs .lm-TabBar-tab,
-        .azudl-tabs .p-TabBar-tabLabel,
-        .azudl-tabs .lm-TabBar-tabLabel {
-            flex: 0 0 auto !important;
-            min-width: max-content !important;
-            max-width: none !important;
-            width: auto !important;
-            white-space: nowrap !important;
-            overflow: visible !important;
-            text-overflow: clip !important;
-        }
-        .azudl-tabs .widget-tab-contents,
-        .azudl-tabs .p-Widget,
-        .azudl-tabs .lm-Widget {
-            max-width: 100% !important;
-        }
         @media (max-width: 640px) {
             .azudl-card {
                 padding: 12px !important;
@@ -3903,63 +3869,6 @@ class AzuDlGC2GDGUI:
             }
         }
 
-        .azudl-tabs,
-        .azudl-tabs .widget-tab,
-        .azudl-tabs .widget-tab-contents,
-        .azudl-tabs .p-TabPanel,
-        .azudl-tabs .p-TabPanel-stackedPanel,
-        .azudl-tabs .lm-TabPanel,
-        .azudl-tabs .lm-TabPanel-stackedPanel,
-        .azudl-tabs .lm-Widget {
-            background: var(--azudl-shell) !important;
-            color: var(--azudl-text) !important;
-        }
-        .azudl-tabs .widget-tab > .p-TabBar,
-        .azudl-tabs .widget-tab > .lm-TabBar,
-        .azudl-tabs .p-TabBar,
-        .azudl-tabs .lm-TabBar {
-            background: var(--azudl-shell) !important;
-            border: 0 !important;
-            padding: 6px 6px 0 6px !important;
-        }
-        .azudl-tabs .p-TabBar-content,
-        .azudl-tabs .lm-TabBar-content {
-            background: transparent !important;
-        }
-        .azudl-tabs .p-TabBar-tab,
-        .azudl-tabs .lm-TabBar-tab {
-            background: #f8fafc !important;
-            color: #334155 !important;
-            border: 1px solid var(--azudl-border) !important;
-            border-bottom-color: var(--azudl-border-strong) !important;
-            border-radius: 12px 12px 0 0 !important;
-            margin: 0 4px 0 0 !important;
-            min-height: 38px !important;
-            padding: 0 16px !important;
-            box-shadow: none !important;
-        }
-        .azudl-tabs .p-TabBar-tab:hover,
-        .azudl-tabs .lm-TabBar-tab:hover {
-            background: #eef6ff !important;
-            color: var(--azudl-primary-dark) !important;
-        }
-        .azudl-tabs .p-TabBar-tab.p-mod-current,
-        .azudl-tabs .lm-TabBar-tab.lm-mod-current,
-        .azudl-tabs .lm-TabBar-tab.p-mod-current,
-        .azudl-tabs .p-TabBar-tab.lm-mod-current {
-            background: #ffffff !important;
-            color: var(--azudl-primary-dark) !important;
-            font-weight: 800 !important;
-            border-color: var(--azudl-border-strong) !important;
-            border-top: 3px solid var(--azudl-primary) !important;
-            border-bottom-color: #ffffff !important;
-        }
-        .azudl-tabs .p-TabBar-tabLabel,
-        .azudl-tabs .lm-TabBar-tabLabel {
-            color: inherit !important;
-            font-weight: inherit !important;
-            font-size: 13px !important;
-        }
 
         .azudl-root .widget-text,
         .azudl-root .widget-textarea,
@@ -4018,43 +3927,44 @@ class AzuDlGC2GDGUI:
         </div>
         """)
 
-        tabs = widgets.Tab(children=[
-            self.build_dashboard_tab(),
-            self.build_auto_tab(),
-            self.build_direct_tab(),
-            self.build_youtube_tab(),
-            self.build_auth_tab(),
-            self.build_torrent_tab(),
-            self.build_batch_tab(),
-            self.build_github_tab(),
-            self.build_official_project_tab(),
-            self.build_files_tab(),
-            self.build_archives_tab(),
-            self.build_maintenance_tab(),
-            self.build_developer_tab(),
-            self.build_guide_tab()
+        sections = {
+            "Direct": self.build_direct_tab(),
+            "YouTube": self.build_youtube_tab(),
+            "Batch": self.build_batch_tab(),
+            "GitHub": self.build_github_tab(),
+            "Auto": self.build_auto_tab(),
+            "Dashboard": self.build_dashboard_tab(),
+            "Auth": self.build_auth_tab(),
+            "Torrent": self.build_torrent_tab(),
+            "Official": self.build_official_project_tab(),
+            "Files": self.build_files_tab(),
+            "Archives": self.build_archives_tab(),
+            "Maintenance": self.build_maintenance_tab(),
+            "Developer": self.build_developer_tab(),
+            "Guide": self.build_guide_tab(),
+        }
+        self.section_picker = widgets.Dropdown(
+            description="Section", options=tuple(sections), value="Direct",
+            layout=widgets.Layout(width="240px"),
+        )
+        self.section_content = widgets.VBox([sections["Direct"]])
+
+        def select_section(change):
+            self.section_content.children = (sections[change["new"]],)
+
+        self.section_picker.observe(select_section, names="value")
+
+        def shortcut(section, label):
+            button = self.button(label, "info", "175px")
+            button.on_click(lambda _: setattr(self.section_picker, "value", section))
+            return button
+
+        shortcuts = self.action_row([
+            shortcut("Direct", "Direct download"),
+            shortcut("YouTube", "YouTube download"),
+            shortcut("Batch", "Batch download"),
+            shortcut("GitHub", "GitHub download"),
         ])
-        tabs.add_class("azudl-tabs")
-
-        titles = [
-            "Dashboard",
-            "Auto",
-            "Direct",
-            "YouTube",
-            "Auth",
-            "Torrent",
-            "Batch",
-            "GitHub",
-            "Official",
-            "Files",
-            "Archives",
-            "Maintenance",
-            "Developer",
-            "Guide"
-        ]
-
-        for index, title in enumerate(titles):
-            tabs.set_title(index, title)
 
         refresh_button = self.button("â†» Refresh storage", "info", "150px")
         refresh_button.on_click(lambda button: self.refresh_storage())
@@ -4066,10 +3976,12 @@ class AzuDlGC2GDGUI:
         root = widgets.VBox([
             self.css(),
             header,
+            shortcuts,
+            self.section_picker,
+            self.section_content,
             self.storage_html,
-            self.action_row([refresh_button, clear_button, save_button]),
             self.status_html,
-            tabs,
+            self.action_row([refresh_button, clear_button, save_button]),
             widgets.HTML(value="<div class='azudl-panel-title' style='margin-top:10px'>Output</div>"),
             self.output
         ], layout=widgets.Layout(gap="10px"))
@@ -4248,8 +4160,8 @@ class AzuDlGC2GDGUI:
         self.direct_file_name = self.text("File name", "Optional output file name")
         self.direct_speed = self.text("Speed limit", "Optional, example 5M")
         self.direct_headers = self.textarea("Headers JSON", '{"User-Agent":"Mozilla/5.0"}', rows=4)
-        start = self.button("Start download", "success", "280px", start=True)
-        start.on_click(self.handle_direct_download)
+        self.direct_start = self.button("Start direct download", "success", "280px", start=True)
+        self.direct_start.on_click(self.handle_direct_download)
 
         return self.panel(
             "Direct URL download",
@@ -4260,7 +4172,7 @@ class AzuDlGC2GDGUI:
                 self.direct_file_name,
                 self.direct_speed,
                 self.direct_headers,
-                start
+                self.direct_start
             ]
         )
 

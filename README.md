@@ -2,7 +2,7 @@
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/asmitsharma-alt/AzuDL-GC2GD/blob/main/AzuDL_Drive.ipynb)
 
-Run both notebook cells and authorize the Drive mount. Choose a tab and start a download.
+Run both notebook cells and authorize the Drive mount. The Direct download form opens first. Use the shortcuts or the Section menu to change download types.
 
 - **Direct** uses AzuDL's existing aria2 resume and parallel transfer settings. For a fresh HTTP download, it checks Drive's reported free space when the server provides a file size.
 - **YouTube** stores yt-dlp downloads, playlist files, FFmpeg merge inputs, and MP3 conversion files in a working folder on Drive. Completed files are renamed into place and verified. Merging may need space for the inputs and output at once. On failure, the notebook reports where to find partial files under .azudl-in-progress.

@@ -99,6 +99,19 @@ class DriveEditionTests(unittest.TestCase):
             gui = azu.AzuDlGC2GDGUI(self.app)
         self.assertIsInstance(gui.build_torrent_tab(), azu.widgets.Box)
 
+    def test_downloads_are_visible_on_launch_and_navigation_keeps_inputs(self):
+        gui = azu.AzuDlGC2GDGUI(self.app)
+        default_panel, = gui.section_content.children
+        self.assertEqual(gui.section_picker.value, "Direct")
+        self.assertIn(gui.direct_url, default_panel.children)
+        self.assertIn(gui.direct_start, default_panel.children)
+        gui.direct_url.value = "https://example.org/file.zip"
+        gui.section_picker.value = "YouTube"
+        self.assertIn(gui.youtube_url, gui.section_content.children[0].children)
+        gui.section_picker.value = "Direct"
+        self.assertIs(gui.section_content.children[0], default_panel)
+        self.assertEqual(gui.direct_url.value, "https://example.org/file.zip")
+
     def test_direct_quota_and_existing_checkpoint(self):
         self.app.add_aria2_download = MagicMock(return_value="1")
         for name in ("monitor_aria2", "print_aria2_item_paths", "verify_aria2_status_files", "verify_download_outputs"):
